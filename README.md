@@ -1,7 +1,35 @@
 # Android 10 Audio HAL 2.0 添加自定义接口指南
 
 ## 目标
-在 Audio HAL 2.0 中添加 `openBluetooth()` 接口
+在 Audio HAL 2.0 中添加 `openBluetooth()` 接口，并从**自定义进程**直接调用
+
+## 架构图
+
+```
+┌─────────────────────────────────┐
+│      你的自定义进程              │
+│   (HIDL Client / 直接调用)      │
+│                                 │
+│  sp<IDevice> device =           │
+│    IDevice::getService();       │
+│  device->openBluetooth(true);   │
+└───────────────┬─────────────────┘
+                │ HIDL (hwbinder)
+                ▼
+┌─────────────────────────────────┐
+│  android.hardware.audio@2.0    │
+│         -service               │
+│  ┌───────────────────────────┐ │
+│  │ Device::openBluetooth()   │ │
+│  └───────────────────────────┘ │
+└───────────────┬─────────────────┘
+                │
+                ▼
+┌─────────────────────────────────┐
+│         audio_hw.c              │
+│    (Vendor HAL 实现)            │
+└─────────────────────────────────┘
+```
 
 ---
 
@@ -486,55 +514,378 @@ static int adev_open(const hw_module_t* module, const char* name,
 
 ---
 
-## 五、AudioFlinger 调用示例
+## 五、自定义进程调用 HIDL 接口
 
-### 5.1 在 AudioFlinger 中调用
+### 5.1 客户端代码示例
 
-**文件路径**: `frameworks/av/services/audioflinger/AudioFlinger.cpp`
+**文件路径**: `vendor/[your_company]/bluetooth_ctrl/BluetoothAudioClient.cpp`
 
 ```cpp
-status_t AudioFlinger::openBluetooth(bool enable) {
-    ALOGD("%s: enable=%d", __func__, enable);
-    
-    Mutex::Autolock _l(mLock);
-    
-    // 获取主设备
-    AudioHwDevice *dev = mAudioHwDevs.valueFor(AUDIO_MODULE_HANDLE_NONE);
-    if (dev == nullptr) {
-        ALOGE("%s: no primary device", __func__);
-        return NO_INIT;
-    }
-    
-    // 调用 HAL 接口
-    return dev->hwDevice()->openBluetooth(enable);
-}
+#define LOG_TAG "BluetoothAudioClient"
 
-status_t AudioFlinger::getBluetoothStatus(bool *enabled) {
-    ALOGD("%s", __func__);
-    
-    Mutex::Autolock _l(mLock);
-    
-    AudioHwDevice *dev = mAudioHwDevs.valueFor(AUDIO_MODULE_HANDLE_NONE);
-    if (dev == nullptr) {
-        return NO_INIT;
+#include <android/hardware/audio/2.0/IDevicesFactory.h>
+#include <android/hardware/audio/2.0/IDevice.h>
+#include <android/hardware/audio/2.0/types.h>
+#include <hidl/HidlTransportSupport.h>
+#include <log/log.h>
+
+using android::sp;
+using android::hardware::Return;
+using android::hardware::Void;
+using android::hardware::audio::V2_0::IDevicesFactory;
+using android::hardware::audio::V2_0::IDevice;
+using android::hardware::audio::V2_0::Result;
+
+class BluetoothAudioClient {
+public:
+    BluetoothAudioClient() : mDevice(nullptr) {
+        init();
     }
-    
-    return dev->hwDevice()->getBluetoothStatus(enabled);
+
+    ~BluetoothAudioClient() {
+        mDevice = nullptr;
+    }
+
+    /**
+     * 初始化：获取 Audio HAL 服务
+     */
+    bool init() {
+        // 1. 获取 IDevicesFactory 服务
+        sp<IDevicesFactory> factory = IDevicesFactory::getService();
+        if (factory == nullptr) {
+            ALOGE("Failed to get IDevicesFactory service");
+            return false;
+        }
+        ALOGD("Got IDevicesFactory service");
+
+        // 2. 打开 primary 设备
+        Result retval;
+        Return<void> ret = factory->openDevice(
+            "primary",  // 设备名称: "primary", "a2dp", "usb" 等
+            [&](Result r, const sp<IDevice>& device) {
+                retval = r;
+                if (r == Result::OK) {
+                    mDevice = device;
+                }
+            });
+
+        if (!ret.isOk()) {
+            ALOGE("openDevice HIDL call failed");
+            return false;
+        }
+
+        if (retval != Result::OK) {
+            ALOGE("openDevice failed, result=%d", retval);
+            return false;
+        }
+
+        ALOGD("Successfully opened primary device");
+        return true;
+    }
+
+    /**
+     * 打开/关闭蓝牙
+     */
+    bool openBluetooth(bool enable) {
+        if (mDevice == nullptr) {
+            ALOGE("Device not initialized");
+            return false;
+        }
+
+        ALOGD("openBluetooth: enable=%d", enable);
+
+        // 调用 HIDL 接口
+        Return<Result> ret = mDevice->openBluetooth(enable);
+
+        if (!ret.isOk()) {
+            ALOGE("openBluetooth HIDL call failed");
+            return false;
+        }
+
+        Result result = ret;
+        if (result != Result::OK) {
+            ALOGE("openBluetooth failed, result=%d", result);
+            return false;
+        }
+
+        ALOGD("openBluetooth success");
+        return true;
+    }
+
+    /**
+     * 获取蓝牙状态
+     */
+    bool getBluetoothStatus(bool* enabled) {
+        if (mDevice == nullptr) {
+            ALOGE("Device not initialized");
+            return false;
+        }
+
+        Result retval;
+        Return<void> ret = mDevice->getBluetoothStatus(
+            [&](Result r, bool e) {
+                retval = r;
+                if (enabled != nullptr) {
+                    *enabled = e;
+                }
+            });
+
+        if (!ret.isOk()) {
+            ALOGE("getBluetoothStatus HIDL call failed");
+            return false;
+        }
+
+        return retval == Result::OK;
+    }
+
+private:
+    sp<IDevice> mDevice;
+};
+
+// ========== main 函数示例 ==========
+int main(int argc, char** argv) {
+    ALOGD("BluetoothAudioClient starting...");
+
+    // 初始化 HIDL
+    android::hardware::configureRpcThreadpool(1, true /* callerWillJoin */);
+
+    // 创建客户端
+    BluetoothAudioClient client;
+
+    // 测试调用
+    if (argc > 1) {
+        bool enable = (strcmp(argv[1], "on") == 0 || strcmp(argv[1], "1") == 0);
+        ALOGD("Setting bluetooth: %s", enable ? "ON" : "OFF");
+        
+        if (client.openBluetooth(enable)) {
+            ALOGD("openBluetooth succeeded");
+        } else {
+            ALOGE("openBluetooth failed");
+        }
+    }
+
+    // 获取状态
+    bool status = false;
+    if (client.getBluetoothStatus(&status)) {
+        ALOGD("Bluetooth status: %s", status ? "enabled" : "disabled");
+    }
+
+    // 如果是服务进程，加入线程池
+    // android::hardware::joinRpcThreadpool();
+
+    return 0;
 }
 ```
 
-### 5.2 在 IAudioFlinger.aidl 中添加接口 (如需暴露给上层)
+### 5.2 Android.bp 编译配置
 
-**文件路径**: `frameworks/av/media/libaudioclient/aidl/android/media/IAudioFlingerService.aidl`
+**文件路径**: `vendor/[your_company]/bluetooth_ctrl/Android.bp`
 
-```aidl
-interface IAudioFlingerService {
-    // ... 现有接口 ...
+```blueprint
+cc_binary {
+    name: "bluetooth_audio_ctrl",
+    vendor: true,  // 放在 vendor 分区
     
-    // 新增蓝牙控制接口
-    int openBluetooth(boolean enable);
-    boolean getBluetoothStatus();
+    srcs: [
+        "BluetoothAudioClient.cpp",
+    ],
+    
+    shared_libs: [
+        // 基础库
+        "liblog",
+        "libutils",
+        "libcutils",
+        "libbase",
+        
+        // HIDL 相关库
+        "libhidlbase",
+        "libhidltransport",
+        "libhwbinder",
+        
+        // Audio HAL 2.0 接口库
+        "android.hardware.audio@2.0",
+        "android.hardware.audio.common@2.0",
+        "android.hardware.audio.common@2.0-util",
+    ],
+    
+    // 头文件路径
+    include_dirs: [
+        "hardware/interfaces/audio/2.0/default",
+    ],
+    
+    cflags: [
+        "-Wall",
+        "-Werror",
+        "-Wno-unused-parameter",
+    ],
 }
+```
+
+### 5.3 如果是作为服务进程运行
+
+**文件路径**: `vendor/[your_company]/bluetooth_ctrl/BluetoothAudioService.cpp`
+
+```cpp
+#define LOG_TAG "BluetoothAudioService"
+
+#include <android/hardware/audio/2.0/IDevicesFactory.h>
+#include <android/hardware/audio/2.0/IDevice.h>
+#include <hidl/HidlTransportSupport.h>
+#include <binder/IPCThreadState.h>
+#include <binder/ProcessState.h>
+#include <log/log.h>
+
+using namespace android;
+using namespace android::hardware::audio::V2_0;
+
+sp<IDevice> gAudioDevice = nullptr;
+
+// 初始化 Audio HAL 连接
+bool initAudioHal() {
+    sp<IDevicesFactory> factory = IDevicesFactory::getService();
+    if (factory == nullptr) {
+        ALOGE("Cannot get IDevicesFactory");
+        return false;
+    }
+
+    Result retval;
+    factory->openDevice("primary",
+        [&](Result r, const sp<IDevice>& device) {
+            retval = r;
+            if (r == Result::OK) {
+                gAudioDevice = device;
+            }
+        });
+
+    return (retval == Result::OK && gAudioDevice != nullptr);
+}
+
+// 暴露给其他进程调用的接口 (通过 Binder)
+class BluetoothAudioService : public BBinder {
+public:
+    enum {
+        OPEN_BLUETOOTH = IBinder::FIRST_CALL_TRANSACTION,
+        GET_BLUETOOTH_STATUS,
+    };
+
+    status_t onTransact(uint32_t code, const Parcel& data, 
+                        Parcel* reply, uint32_t flags) override {
+        switch (code) {
+            case OPEN_BLUETOOTH: {
+                bool enable = data.readBool();
+                ALOGD("OPEN_BLUETOOTH: enable=%d", enable);
+                
+                if (gAudioDevice != nullptr) {
+                    Return<Result> ret = gAudioDevice->openBluetooth(enable);
+                    reply->writeInt32(ret.isOk() && ret == Result::OK ? 0 : -1);
+                } else {
+                    reply->writeInt32(-1);
+                }
+                return NO_ERROR;
+            }
+            case GET_BLUETOOTH_STATUS: {
+                bool enabled = false;
+                if (gAudioDevice != nullptr) {
+                    gAudioDevice->getBluetoothStatus(
+                        [&](Result r, bool e) {
+                            if (r == Result::OK) enabled = e;
+                        });
+                }
+                reply->writeBool(enabled);
+                return NO_ERROR;
+            }
+            default:
+                return BBinder::onTransact(code, data, reply, flags);
+        }
+    }
+};
+
+int main() {
+    ALOGD("BluetoothAudioService starting...");
+
+    // 初始化 HIDL 线程池
+    hardware::configureRpcThreadpool(4, false);
+
+    // 初始化 Binder
+    sp<ProcessState> proc(ProcessState::self());
+    proc->startThreadPool();
+
+    // 初始化 Audio HAL
+    if (!initAudioHal()) {
+        ALOGE("Failed to init Audio HAL");
+        return -1;
+    }
+
+    // 注册服务
+    sp<BluetoothAudioService> service = new BluetoothAudioService();
+    defaultServiceManager()->addService(String16("bluetooth_audio"), service);
+
+    ALOGD("BluetoothAudioService is running...");
+
+    // 主线程加入
+    IPCThreadState::self()->joinThreadPool();
+    return 0;
+}
+```
+
+### 5.4 init.rc 配置（服务自启动）
+
+**文件路径**: `vendor/[your_company]/bluetooth_ctrl/bluetooth_audio.rc`
+
+```rc
+service bluetooth_audio_ctrl /vendor/bin/bluetooth_audio_ctrl
+    class main
+    user system
+    group system audio bluetooth
+    disabled
+    oneshot
+
+# 或者作为常驻服务
+service bluetooth_audio_svc /vendor/bin/bluetooth_audio_service
+    class hal
+    user system
+    group system audio bluetooth
+```
+
+### 5.5 SELinux 权限配置
+
+**文件路径**: `device/[vendor]/[device]/sepolicy/bluetooth_audio.te`
+
+```te
+# 定义新的类型
+type bluetooth_audio_ctrl, domain;
+type bluetooth_audio_ctrl_exec, exec_type, vendor_file_type, file_type;
+
+# 入口规则
+init_daemon_domain(bluetooth_audio_ctrl)
+
+# 允许访问 hwbinder
+hwbinder_use(bluetooth_audio_ctrl)
+
+# 允许调用 audio HAL
+hal_client_domain(bluetooth_audio_ctrl, hal_audio)
+
+# 允许访问 audio HAL 服务
+allow bluetooth_audio_ctrl hal_audio_hwservice:hwservice_manager find;
+
+# 允许使用 HwBinder
+allow bluetooth_audio_ctrl hwservicemanager:binder { call transfer };
+
+# 日志权限
+allow bluetooth_audio_ctrl log_device:chr_file { write open };
+```
+
+**文件路径**: `device/[vendor]/[device]/sepolicy/file_contexts`
+
+```
+/vendor/bin/bluetooth_audio_ctrl    u:object_r:bluetooth_audio_ctrl_exec:s0
+```
+
+**文件路径**: `device/[vendor]/[device]/sepolicy/hwservice_contexts`
+
+```
+# 如果需要暴露新的 hwservice
+android.hardware.audio::IDevice    u:object_r:hal_audio_hwservice:s0
 ```
 
 ---
@@ -544,105 +895,237 @@ interface IAudioFlingerService {
 ### 6.1 编译命令
 
 ```bash
-# 编译 HIDL 接口
+# 1. 编译 HIDL 接口 (修改 IDevice.hal 后)
 mmm hardware/interfaces/audio/2.0/
 
-# 编译 HAL Service
+# 2. 编译 HAL Service (修改 Device.cpp 后)
 mmm hardware/interfaces/audio/2.0/default/
 
-# 编译 AudioFlinger
-mmm frameworks/av/services/audioflinger/
-
-# 编译 libaudiohal
-mmm frameworks/av/media/libaudiohal/
+# 3. 编译你的客户端程序
+mmm vendor/[your_company]/bluetooth_ctrl/
 
 # 或者整体编译
 make -j$(nproc)
 ```
 
-### 6.2 测试方法
+### 6.2 推送测试
 
 ```bash
-# 1. 查看日志
-adb logcat -s AudioFlinger:* audio_hw:* DeviceHalHidl:*
+# 推送修改后的 HAL Service
+adb root
+adb remount
+adb push out/target/product/[device]/vendor/bin/hw/android.hardware.audio@2.0-service /vendor/bin/hw/
 
-# 2. 通过 dumpsys 查看状态
-adb shell dumpsys media.audio_flinger
+# 推送你的客户端程序
+adb push out/target/product/[device]/vendor/bin/bluetooth_audio_ctrl /vendor/bin/
 
-# 3. 如果暴露了 Binder 接口，可以通过 service call 测试
-adb shell service call audio XX  # XX 是接口编号
+# 重启 HAL Service
+adb shell stop
+adb shell start
+
+# 或者只重启 audio HAL
+adb shell "pkill -9 android.hardware.audio@2.0-service"
+# HAL 会被 hwservicemanager 自动重启
+```
+
+### 6.3 运行测试
+
+```bash
+# 运行你的程序
+adb shell /vendor/bin/bluetooth_audio_ctrl on
+adb shell /vendor/bin/bluetooth_audio_ctrl off
+
+# 查看日志
+adb logcat -s BluetoothAudioClient:* audio_hw:* Device:*
+
+# 查看 HAL 服务状态
+adb shell lshal | grep audio
+```
+
+### 6.4 调试技巧
+
+```bash
+# 1. 检查 HAL 服务是否运行
+adb shell ps -A | grep audio
+
+# 2. 检查 HIDL 接口是否可用
+adb shell lshal debug android.hardware.audio@2.0::IDevicesFactory/default
+
+# 3. 检查 SELinux 是否阻止
+adb shell dmesg | grep -i denied
+adb shell setenforce 0  # 临时关闭 SELinux 测试
+
+# 4. 查看 hwbinder 调用
+adb shell "echo 1 > /sys/kernel/debug/tracing/events/binder/enable"
+adb shell cat /sys/kernel/debug/tracing/trace
 ```
 
 ---
 
-## 七、完整调用流程图
+## 七、完整调用流程图（自定义进程版本）
 
 ```
-┌───────────────────┐
-│    App / Service  │
-│  (Java/Native)    │
-└─────────┬─────────┘
-          │ Binder
-          ▼
-┌───────────────────┐
-│   AudioFlinger    │
-│ openBluetooth()   │
-└─────────┬─────────┘
-          │
-          ▼
-┌───────────────────┐
-│  DeviceHalHidl    │
-│ openBluetooth()   │
-└─────────┬─────────┘
-          │ HIDL (hwbinder)
-          ▼
-┌───────────────────────────────────┐
-│  android.hardware.audio@2.0      │
-│  Device::openBluetooth()         │
-└─────────┬─────────────────────────┘
-          │
-          ▼
-┌───────────────────┐
-│   audio_hw.c      │
-│ set_parameters()  │
-│ 或 open_bluetooth()│
-└─────────┬─────────┘
-          │
-          ▼
-┌───────────────────┐
-│  蓝牙音频处理      │
-│  (A2DP/SCO/etc)   │
-└───────────────────┘
+┌─────────────────────────────────────┐
+│       你的自定义进程                 │
+│    bluetooth_audio_ctrl             │
+│                                     │
+│  1. IDevicesFactory::getService()   │
+│  2. factory->openDevice("primary")  │
+│  3. device->openBluetooth(true)     │
+└─────────────────┬───────────────────┘
+                  │ 
+                  │ HIDL (hwbinder IPC)
+                  │
+                  ▼
+┌─────────────────────────────────────┐
+│  android.hardware.audio@2.0-service │
+│                                     │
+│  Device::openBluetooth(bool enable) │
+│      │                              │
+│      ▼                              │
+│  mDevice->set_parameters(           │
+│    "bluetooth_enabled=1")           │
+└─────────────────┬───────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────┐
+│          audio_hw.c                 │
+│   (Vendor 底层 HAL 实现)             │
+│                                     │
+│  adev_set_parameters() {            │
+│    // 解析 bluetooth_enabled        │
+│    // 执行蓝牙音频开关逻辑           │
+│  }                                  │
+└─────────────────┬───────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────┐
+│        蓝牙音频处理                  │
+│    (A2DP/SCO/HFP 等)                │
+└─────────────────────────────────────┘
 ```
 
 ---
 
 ## 八、注意事项
 
-1. **接口兼容性**: 修改 HIDL 接口会破坏二进制兼容，需要同时更新 HAL Service 和 Framework
+### 8.1 自定义进程调用的关键点
 
-2. **推荐方式**: 如果只是传递参数，建议使用现有的 `setParameters()` 接口，无需修改 HIDL
+1. **HIDL 初始化**: 必须调用 `configureRpcThreadpool()` 初始化 HIDL 线程池
 
-3. **蓝牙音频**: 实际的蓝牙音频通常由 `audio.a2dp.default.so` 或蓝牙协议栈管理
+2. **服务获取顺序**: 先获取 `IDevicesFactory`，再通过它打开 `IDevice`
 
-4. **SELinux**: 新增接口可能需要更新 SELinux 策略
+3. **设备名称**: `openDevice()` 参数通常是 `"primary"`，不同设备可能不同
 
-5. **版本号**: 如果修改了 HIDL 接口，考虑升级版本号 (如 2.0 -> 2.1)
+4. **生命周期**: 保持 `sp<IDevice>` 引用，避免被释放
+
+### 8.2 权限相关
+
+1. **SELinux**: 必须配置正确的 SELinux 策略，否则会被拒绝访问
+
+2. **用户/组**: 进程需要 `system` 或 `audio` 组权限
+
+3. **hwbinder**: 需要 `hwbinder_use()` 权限
+
+### 8.3 其他注意事项
+
+1. **接口兼容性**: 修改 HIDL 接口会破坏二进制兼容，需要同时更新 HAL Service
+
+2. **蓝牙音频**: 实际的蓝牙音频通常由 `audio.a2dp.default.so` 或蓝牙协议栈管理
+
+3. **版本号**: 如果修改了 HIDL 接口，考虑升级版本号 (如 2.0 -> 2.1)
+
+4. **与 AudioFlinger 冲突**: 你的进程和 AudioFlinger 都在调用同一个 HAL，注意状态同步
 
 ---
 
 ## 九、替代方案：使用现有 setParameters
 
-如果不想修改 HIDL 接口，可以直接使用现有的 `setParameters`：
+如果不想修改 HIDL 接口，可以从自定义进程直接调用现有的 `setParameters`：
 
 ```cpp
-// AudioFlinger 侧
-status_t AudioFlinger::openBluetooth(bool enable) {
-    String8 params = String8::format("bluetooth_enabled=%d", enable ? 1 : 0);
-    return mPrimaryHardwareDev->hwDevice()->setParameters(params);
-}
+#include <android/hardware/audio/2.0/IDevicesFactory.h>
+#include <android/hardware/audio/2.0/IDevice.h>
 
-// audio_hw.c 侧只需要处理 set_parameters 中的 "bluetooth_enabled" 参数
+using namespace android::hardware::audio::V2_0;
+
+int main() {
+    android::hardware::configureRpcThreadpool(1, true);
+    
+    // 获取服务
+    sp<IDevicesFactory> factory = IDevicesFactory::getService();
+    sp<IDevice> device;
+    
+    factory->openDevice("primary", [&](Result r, const sp<IDevice>& d) {
+        if (r == Result::OK) device = d;
+    });
+    
+    // 使用现有的 setParameters 接口
+    hidl_vec<ParameterValue> params;
+    params.resize(1);
+    params[0].key = "bluetooth_enabled";
+    params[0].value = "1";  // 或 "0"
+    
+    Return<Result> ret = device->setParameters(params);
+    
+    return 0;
+}
 ```
 
-这种方式**不需要修改任何 HIDL 接口**，是最简单的实现方式。
+这种方式**不需要修改任何 HIDL 接口**，只需要底层 `audio_hw.c` 处理该参数。
+
+---
+
+## 十、文件清单总结
+
+### 需要修改的文件
+
+| 序号 | 文件 | 说明 |
+|------|------|------|
+| 1 | `hardware/interfaces/audio/2.0/IDevice.hal` | 添加 HIDL 接口定义 |
+| 2 | `hardware/interfaces/audio/2.0/default/Device.h` | HAL Service 头文件 |
+| 3 | `hardware/interfaces/audio/2.0/default/Device.cpp` | HAL Service 实现 |
+| 4 | `device/[vendor]/[device]/audio/audio_hw.c` | 底层 HAL 处理 (可选) |
+
+### 需要新增的文件
+
+| 序号 | 文件 | 说明 |
+|------|------|------|
+| 1 | `vendor/xxx/bluetooth_ctrl/BluetoothAudioClient.cpp` | 你的客户端代码 |
+| 2 | `vendor/xxx/bluetooth_ctrl/Android.bp` | 编译配置 |
+| 3 | `device/xxx/sepolicy/bluetooth_audio.te` | SELinux 策略 |
+| 4 | `device/xxx/sepolicy/file_contexts` | 文件上下文 |
+
+---
+
+## 十一、快速开始
+
+```bash
+# 1. 修改 HIDL 接口
+vim hardware/interfaces/audio/2.0/IDevice.hal
+
+# 2. 修改 HAL Service
+vim hardware/interfaces/audio/2.0/default/Device.cpp
+
+# 3. 创建你的客户端目录
+mkdir -p vendor/mycompany/bluetooth_ctrl
+
+# 4. 创建客户端代码和编译配置
+vim vendor/mycompany/bluetooth_ctrl/BluetoothAudioClient.cpp
+vim vendor/mycompany/bluetooth_ctrl/Android.bp
+
+# 5. 配置 SELinux
+vim device/myvendor/mydevice/sepolicy/bluetooth_audio.te
+
+# 6. 编译
+mmm hardware/interfaces/audio/2.0/
+mmm hardware/interfaces/audio/2.0/default/
+mmm vendor/mycompany/bluetooth_ctrl/
+
+# 7. 推送测试
+adb root && adb remount
+adb push ... /vendor/bin/hw/
+adb push ... /vendor/bin/
+adb shell stop && adb shell start
+adb shell /vendor/bin/bluetooth_audio_ctrl on
+```
