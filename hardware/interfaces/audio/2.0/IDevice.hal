@@ -1,0 +1,253 @@
+/*
+ * Copyright (C) 2016 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ * QCS8250 Audio HAL 2.0 - Bluetooth Extension
+ */
+
+package android.hardware.audio@2.0;
+
+import android.hardware.audio.common@2.0;
+import IStreamIn;
+import IStreamOut;
+
+interface IDevice {
+    /**
+     * Returns whether the device supports setting master volume.
+     *
+     * @return retval operation completion status.
+     * @return supports true if master volume supported.
+     */
+    supportsAudioPatches() generates (bool supports);
+
+    /**
+     * Initiate the audio hardware driver.
+     *
+     * @return retval operation completion status.
+     */
+    initCheck() generates (Result retval);
+
+    /**
+     * Set the audio volume of a voice call.
+     *
+     * @param volume 1.0f means unity, 0.0f is zero.
+     * @return retval operation completion status.
+     */
+    setVoiceVolume(float volume) generates (Result retval);
+
+    /**
+     * Set the audio volume for all audio activities other than voice call.
+     *
+     * @param volume 1.0f means unity, 0.0f is zero.
+     * @return retval operation completion status.
+     */
+    setMasterVolume(float volume) generates (Result retval);
+
+    /**
+     * Get the current master volume value.
+     *
+     * @return retval operation completion status.
+     * @return volume 1.0f means unity, 0.0f is zero.
+     */
+    getMasterVolume() generates (Result retval, float volume);
+
+    /**
+     * Set the audio mute status for all audio activities.
+     *
+     * @param mute whether to mute or not.
+     * @return retval operation completion status.
+     */
+    setMasterMute(bool mute) generates (Result retval);
+
+    /**
+     * Get the current master mute status.
+     *
+     * @return retval operation completion status.
+     * @return mute whether the master is muted or not.
+     */
+    getMasterMute() generates (Result retval, bool mute);
+
+    /**
+     * Returns audio input buffer size according to parameters passed.
+     *
+     * @param config audio configuration.
+     * @return retval operation completion status.
+     * @return bufferSize suggested buffer size in bytes.
+     */
+    getInputBufferSize(AudioConfig config)
+            generates (Result retval, uint64_t bufferSize);
+
+    /**
+     * Opens audio output stream.
+     *
+     * @param ioHandle identifier of the stream.
+     * @param device audio device associated with the stream.
+     * @param config stream configuration.
+     * @param flags additional flags.
+     * @return retval operation completion status.
+     * @return outStream created output stream.
+     * @return suggestedConfig stream config suggested by the HAL.
+     */
+    openOutputStream(
+            AudioIoHandle ioHandle,
+            DeviceAddress device,
+            AudioConfig config,
+            AudioOutputFlag flags)
+        generates (
+            Result retval,
+            IStreamOut outStream,
+            AudioConfig suggestedConfig);
+
+    /**
+     * Opens audio input stream.
+     *
+     * @param ioHandle identifier of the stream.
+     * @param device audio device associated with the stream.
+     * @param config stream configuration.
+     * @param flags additional flags.
+     * @param source source specification.
+     * @return retval operation completion status.
+     * @return inStream created input stream.
+     * @return suggestedConfig stream config suggested by the HAL.
+     */
+    openInputStream(
+            AudioIoHandle ioHandle,
+            DeviceAddress device,
+            AudioConfig config,
+            AudioInputFlag flags,
+            AudioSource source)
+        generates (
+            Result retval,
+            IStreamIn inStream,
+            AudioConfig suggestedConfig);
+
+    /**
+     * Sets the audio parameters.
+     *
+     * @param parameters device specific key value pairs.
+     * @return retval operation completion status.
+     */
+    setParameters(vec<ParameterValue> parameters)
+            generates (Result retval);
+
+    /**
+     * Gets the audio parameters.
+     *
+     * @param keys keys for parameters to retrieve.
+     * @return retval operation completion status.
+     * @return parameters device specific key value pairs.
+     */
+    getParameters(vec<string> keys)
+            generates (Result retval, vec<ParameterValue> parameters);
+
+    /**
+     * Returns the microphones' info.
+     *
+     * @return retval operation completion status.
+     * @return microphones info about microphones.
+     */
+    getMicrophones()
+            generates (Result retval, vec<MicrophoneInfo> microphones);
+
+    /**
+     * Sets the global screen state.
+     *
+     * @param turnedOn whether the screen is turned on.
+     * @return retval operation completion status.
+     */
+    setScreenState(bool turnedOn) generates (Result retval);
+
+    /**
+     * Dumps debug information.
+     *
+     * @param fd file descriptor to dump to.
+     */
+    debugDump(handle fd);
+
+    /*
+     * ============================================================
+     * QCS8250 Bluetooth Audio Extension - 自定义接口
+     * ============================================================
+     */
+
+    /**
+     * 开启/关闭蓝牙音频通路
+     *
+     * @param enable true 开启蓝牙音频, false 关闭
+     * @return retval 操作结果
+     */
+    openBluetooth(bool enable) generates (Result retval);
+
+    /**
+     * 设置蓝牙音频编解码器
+     *
+     * @param codec 编解码器类型: "sbc", "aac", "aptx", "aptx_hd", "ldac"
+     * @return retval 操作结果
+     */
+    setBluetoothCodec(string codec) generates (Result retval);
+
+    /**
+     * 获取当前蓝牙音频状态
+     *
+     * @return retval 操作结果
+     * @return enabled 是否启用
+     * @return codec 当前编解码器
+     */
+    getBluetoothStatus() generates (Result retval, bool enabled, string codec);
+
+    /**
+     * 设置蓝牙音频音量
+     *
+     * @param volume 音量 0.0f ~ 1.0f
+     * @return retval 操作结果
+     */
+    setBluetoothVolume(float volume) generates (Result retval);
+
+    /**
+     * 设置蓝牙 A2DP 设备地址
+     *
+     * @param address 蓝牙 MAC 地址 (格式: "XX:XX:XX:XX:XX:XX")
+     * @return retval 操作结果
+     */
+    setBluetoothA2dpDevice(string address) generates (Result retval);
+
+    /**
+     * 断开蓝牙 A2DP 设备
+     *
+     * @return retval 操作结果
+     */
+    disconnectBluetoothA2dp() generates (Result retval);
+
+    /**
+     * 设置蓝牙 SCO 模式 (用于通话)
+     *
+     * @param enable true 启用 SCO, false 禁用
+     * @return retval 操作结果
+     */
+    setBluetoothScoMode(bool enable) generates (Result retval);
+
+    /**
+     * 获取蓝牙设备信息
+     *
+     * @return retval 操作结果
+     * @return deviceName 设备名称
+     * @return macAddress MAC 地址
+     * @return connected 是否连接
+     */
+    getBluetoothDeviceInfo() generates (
+        Result retval,
+        string deviceName,
+        string macAddress,
+        bool connected);
+};

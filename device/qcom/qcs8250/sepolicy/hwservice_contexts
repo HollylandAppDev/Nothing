@@ -1,0 +1,12 @@
+# ============================================================
+# QCS8250 Bluetooth Audio Control - HW Service Contexts
+# ============================================================
+#
+# 将此内容添加到: device/qcom/qcs8250/sepolicy/hwservice_contexts
+#
+# 注意: Audio HAL 服务通常已经在 AOSP 中定义
+# 这里只是确保正确引用
+#
+
+# Audio HAL 2.0 服务 (通常已存在)
+android.hardware.audio@2.0::IDevicesFactory    u:object_r:hal_audio_hwservice:s0

@@ -1,0 +1,33 @@
+# QCS8250 Bluetooth Audio Control Service
+# 这是一个可选的 init 服务配置
+# 如果需要作为后台服务运行，可以使用此配置
+
+# 作为 oneshot 服务 (手动触发)
+service bluetooth_audio_ctrl /vendor/bin/hw/bluetooth_audio_ctrl
+    class hal
+    user system
+    group audio bluetooth
+    disabled
+    oneshot
+
+# 蓝牙音频开启触发器
+on property:vendor.bluetooth.audio.enable=1
+    start bluetooth_audio_ctrl_enable
+
+service bluetooth_audio_ctrl_enable /vendor/bin/hw/bluetooth_audio_ctrl enable
+    class hal
+    user system
+    group audio bluetooth
+    disabled
+    oneshot
+
+# 蓝牙音频关闭触发器
+on property:vendor.bluetooth.audio.enable=0
+    start bluetooth_audio_ctrl_disable
+
+service bluetooth_audio_ctrl_disable /vendor/bin/hw/bluetooth_audio_ctrl disable
+    class hal
+    user system
+    group audio bluetooth
+    disabled
+    oneshot

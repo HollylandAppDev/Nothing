@@ -1,0 +1,104 @@
+# ============================================================
+# QCS8250 Bluetooth Audio Control - SELinux Policy
+# ============================================================
+#
+# 文件位置: device/qcom/qcs8250/sepolicy/bluetooth_audio.te
+#
+# 这是蓝牙音频控制客户端的 SELinux 策略配置
+# 必须正确配置，否则会出现 avc: denied 错误
+#
+
+# ============================================================
+# 1. 定义新的类型
+# ============================================================
+
+# 蓝牙音频控制进程类型
+type bluetooth_audio_ctrl, domain;
+type bluetooth_audio_ctrl_exec, exec_type, vendor_file_type, file_type;
+
+# ============================================================
+# 2. 域转换规则
+# ============================================================
+
+# 从 init 启动时的域转换
+init_daemon_domain(bluetooth_audio_ctrl)
+
+# 允许 shell 执行 (调试用)
+domain_auto_trans(shell, bluetooth_audio_ctrl_exec, bluetooth_audio_ctrl)
+
+# ============================================================
+# 3. HwBinder 权限 (关键!)
+# ============================================================
+
+# 允许使用 hwbinder
+hwbinder_use(bluetooth_audio_ctrl)
+
+# 允许调用 Audio HAL 服务
+hal_client_domain(bluetooth_audio_ctrl, hal_audio)
+
+# 允许获取 Audio HAL 的 hwservice
+allow bluetooth_audio_ctrl hal_audio_hwservice:hwservice_manager find;
+
+# 允许与 Audio HAL 进行 binder 通信
+binder_call(bluetooth_audio_ctrl, hal_audio_default)
+
+# ============================================================
+# 4. 访问 vendor 文件权限
+# ============================================================
+
+# 允许读取 vendor 文件
+allow bluetooth_audio_ctrl vendor_file:dir search;
+allow bluetooth_audio_ctrl vendor_file:file { read open getattr execute };
+
+# 允许访问 vendor configs
+allow bluetooth_audio_ctrl vendor_configs_file:dir search;
+allow bluetooth_audio_ctrl vendor_configs_file:file { read open getattr };
+
+# ============================================================
+# 5. 蓝牙相关权限
+# ============================================================
+
+# 允许访问蓝牙设备
+allow bluetooth_audio_ctrl bluetooth_device:chr_file { read write open ioctl };
+
+# 允许与蓝牙服务通信
+allow bluetooth_audio_ctrl bluetooth:unix_stream_socket connectto;
+
+# ============================================================
+# 6. 日志权限
+# ============================================================
+
+# 允许写日志
+allow bluetooth_audio_ctrl logd:unix_dgram_socket sendto;
+
+# ============================================================
+# 7. 系统属性权限
+# ============================================================
+
+# 允许读取系统属性
+get_prop(bluetooth_audio_ctrl, default_prop)
+get_prop(bluetooth_audio_ctrl, vendor_default_prop)
+
+# 允许设置蓝牙相关属性
+set_prop(bluetooth_audio_ctrl, vendor_bluetooth_prop)
+
+# ============================================================
+# 8. 音频设备权限
+# ============================================================
+
+# 允许访问音频设备节点
+allow bluetooth_audio_ctrl audio_device:chr_file { read write open ioctl };
+allow bluetooth_audio_ctrl audio_device:dir search;
+
+# ============================================================
+# 9. 其他必要权限
+# ============================================================
+
+# 允许使用网络 (如果需要)
+# allow bluetooth_audio_ctrl self:netlink_socket { create bind read write };
+
+# 允许读取 proc 文件系统
+allow bluetooth_audio_ctrl proc:file { read open getattr };
+
+# 允许内存映射
+allow bluetooth_audio_ctrl self:process { fork execmem };

@@ -1,0 +1,10 @@
+# ============================================================
+# QCS8250 Bluetooth Audio Control - Property Contexts
+# ============================================================
+#
+# 将此内容添加到: device/qcom/qcs8250/sepolicy/property_contexts
+#
+
+# 蓝牙音频相关属性
+vendor.bluetooth.audio.     u:object_r:vendor_bluetooth_prop:s0
+vendor.bt.audio.            u:object_r:vendor_bluetooth_prop:s0

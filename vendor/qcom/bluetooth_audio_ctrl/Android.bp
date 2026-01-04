@@ -1,0 +1,79 @@
+/*
+ * QCS8250 Bluetooth Audio Control Client
+ * Android.bp 编译配置
+ */
+
+cc_binary {
+    name: "bluetooth_audio_ctrl",
+    vendor: true,
+    relative_install_path: "hw",
+
+    srcs: [
+        "BluetoothAudioClient.cpp",
+    ],
+
+    cflags: [
+        "-Wall",
+        "-Werror",
+        "-Wno-unused-parameter",
+    ],
+
+    shared_libs: [
+        // Android 基础库
+        "liblog",
+        "libutils",
+        "libcutils",
+        "libbase",
+
+        // HIDL 基础库
+        "libhidlbase",
+        "libhidltransport",
+        "libhwbinder",
+
+        // Audio HAL 2.0 接口库 (关键!)
+        "android.hardware.audio@2.0",
+        "android.hardware.audio.common@2.0",
+        "android.hardware.audio.common@2.0-util",
+    ],
+
+    // 允许访问 vendor 分区
+    proprietary: true,
+
+    // 编译选项
+    compile_multilib: "both",
+
+    // 初始化脚本 (可选)
+    init_rc: ["bluetooth_audio_ctrl.rc"],
+}
+
+// 可选: 作为库提供给其他模块使用
+cc_library_shared {
+    name: "libbluetooth_audio_client",
+    vendor: true,
+
+    srcs: [
+        "BluetoothAudioClientLib.cpp",
+    ],
+
+    export_include_dirs: ["include"],
+
+    cflags: [
+        "-Wall",
+        "-Werror",
+        "-Wno-unused-parameter",
+    ],
+
+    shared_libs: [
+        "liblog",
+        "libutils",
+        "libcutils",
+        "libbase",
+        "libhidlbase",
+        "libhidltransport",
+        "libhwbinder",
+        "android.hardware.audio@2.0",
+        "android.hardware.audio.common@2.0",
+    ],
+
+    proprietary: true,
+}

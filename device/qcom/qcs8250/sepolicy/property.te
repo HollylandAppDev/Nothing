@@ -1,0 +1,9 @@
+# ============================================================
+# QCS8250 Bluetooth Audio Control - Property Types
+# ============================================================
+#
+# 将此内容添加到: device/qcom/qcs8250/sepolicy/property.te
+#
+
+# 定义蓝牙属性类型
+type vendor_bluetooth_prop, property_type;
